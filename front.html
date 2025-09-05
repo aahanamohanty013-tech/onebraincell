@@ -1,0 +1,630 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Chyrp Clone | Modern Blogging</title>
+    
+    <!-- Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    
+    <!-- Google Fonts -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    
+    <!-- React & Babel for JSX -->
+    <script src="https://unpkg.com/react@18/umd/react.development.js"></script>
+    <script src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    
+    <!-- Supabase Client -->
+    <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+
+    <!-- Marked.js for Markdown Rendering -->
+    <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+    
+    <!-- highlight.js for Syntax Highlighting -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/github-dark.min.css">
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
+
+    <!-- MathJax for Mathematical Notation -->
+    <script>
+      MathJax = { tex: { inlineMath: [['$', '$'], ['\\(', '\\)']], displayMath: [['$$', '$$'], ['\\[', '\\]']], processEscapes: true }, startup: { ready: () => { MathJax.startup.defaultReady(); MathJax.startup.promise.then(() => { console.log('MathJax initial typesetting complete'); }); } } };
+    </script>
+    <script id="MathJax-script" async src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js"></script>
+
+    <style>
+        body { font-family: 'Inter', sans-serif; }
+        ::-webkit-scrollbar { width: 8px; }
+        ::-webkit-scrollbar-track { background: #f1f1f1; }
+        ::-webkit-scrollbar-thumb { background: #888; border-radius: 4px; }
+        ::-webkit-scrollbar-thumb:hover { background: #555; }
+        .transition-all { transition: all 0.3s ease-in-out; }
+        .prose iframe { width: 100%; aspect-ratio: 16 / 9; border-radius: 8px; }
+        .lightbox { position: fixed; inset: 0; background: rgba(0,0,0,0.8); z-index: 100; display: flex; align-items: center; justify-content: center; backdrop-filter: blur(8px); cursor: pointer; }
+        .lightbox img { max-width: 90vw; max-height: 90vh; border-radius: 8px; cursor: default; }
+    </style>
+</head>
+<body class="bg-gray-50 dark:bg-gray-900 text-gray-900 dark:text-gray-100 transition-all">
+    <div id="root"></div>
+
+    <script type="text/babel">
+        const { createClient } = supabase;
+        const { useState, useEffect, createContext, useContext, useMemo, useRef, useCallback } = React;
+
+        // --- SUPABASE SETUP ---
+        const SUPABASE_URL = 'https://fedudnodvoeqlvtuuahu.supabase.co';
+        const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImZlZHVkbm9kdm9lcWx2dHV1YWh1Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTY5OTcxMDQsImV4cCI6MjA3MjU3MzEwNH0.sVYQ_P5Ztdksu05VbVzX8QQVUF1HbOjab6D7M1LHSLo';
+
+        // --- Configuration Check ---
+        const isConfigured = SUPABASE_URL !== 'https://your-project-id.supabase.co' && SUPABASE_ANON_KEY !== 'your-anon-public-key-goes-here';
+        
+        let supabaseClient;
+        if (isConfigured) {
+            supabaseClient = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+        }
+
+        // --- CONTEXTS & PROVIDERS ---
+        const AuthContext = createContext();
+        const AppContext = createContext();
+
+        const AuthProvider = ({ children }) => {
+            const [user, setUser] = useState(null);
+            const [loading, setLoading] = useState(true);
+            useEffect(() => {
+                if (!isConfigured) { setLoading(false); return; }
+                const { data: { subscription } } = supabaseClient.auth.onAuthStateChange((_, session) => { setUser(session?.user ?? null); setLoading(false); });
+                supabaseClient.auth.getSession().then(({ data: { session } }) => { setUser(session?.user ?? null); setLoading(false); });
+                return () => subscription.unsubscribe();
+            }, []);
+            const value = { user, signOut: () => supabaseClient.auth.signOut(), signIn: (data) => supabaseClient.auth.signInWithPassword(data), signUp: (data) => supabaseClient.auth.signUp(data) };
+            return <AuthContext.Provider value={value}>{!loading ? children : <div className="min-h-screen flex items-center justify-center"><Spinner /></div>}</AuthContext.Provider>;
+        };
+        const useAuth = () => useContext(AuthContext);
+
+        const AppProvider = ({ children }) => {
+            const [page, setPage] = useState({ currentPage: 'home' });
+            const [theme, setTheme] = useState('light');
+            useEffect(() => {
+                const isDarkMode = localStorage.theme === 'dark' || (!('theme' in localStorage) && window.matchMedia('(prefers-color-scheme: dark)').matches);
+                document.documentElement.classList.toggle('dark', isDarkMode); setTheme(isDarkMode ? 'dark' : 'light');
+            }, []);
+            const toggleTheme = () => {
+                const isDark = !document.documentElement.classList.contains('dark');
+                localStorage.theme = isDark ? 'dark' : 'light'; document.documentElement.classList.toggle('dark', isDark); setTheme(isDark ? 'dark' : 'light');
+            };
+            const navigate = (pageName, params = {}) => { setPage({ currentPage: pageName, ...params }); window.scrollTo(0, 0); };
+            return <AppContext.Provider value={{ page, navigate, theme, toggleTheme }}>{children}</AppContext.Provider>;
+        };
+        const useAppContext = () => useContext(AppContext);
+        
+        // --- HOOKS ---
+        const useInfiniteScroll = (callback, hasMore) => {
+            const observer = useRef();
+            return useCallback(node => {
+                if (observer.current) observer.current.disconnect();
+                observer.current = new IntersectionObserver(entries => {
+                    if (entries[0].isIntersecting && hasMore) {
+                        callback();
+                    }
+                });
+                if (node) observer.current.observe(node);
+            }, [callback, hasMore]);
+        };
+        
+        // --- UI & PAGE COMPONENTS ---
+        const Spinner = () => <div className="flex justify-center items-center p-8"><div className="w-12 h-12 border-4 border-blue-500 border-t-transparent rounded-full animate-spin"></div></div>;
+        
+        const ConfigurationError = () => {
+            return (
+                <div className="min-h-screen flex items-center justify-center bg-gray-50 dark:bg-gray-900">
+                    <div className="max-w-2xl w-full bg-white dark:bg-gray-800 p-8 rounded-lg shadow-lg text-center">
+                        <h1 className="text-3xl font-bold text-red-500 mb-4">Configuration Needed</h1>
+                        <p className="text-lg mb-6 text-gray-700 dark:text-gray-300">
+                            The application can't connect to the backend. You need to add your Supabase credentials to the <code>index.html</code> file.
+                        </p>
+                        <div className="text-left bg-gray-100 dark:bg-gray-700 p-4 rounded-lg">
+                            <p className="font-semibold mb-2">How to fix this:</p>
+                            <ol className="list-decimal list-inside space-y-2">
+                                <li>Go to your project on <a href="https://app.supabase.com" target="_blank" className="text-blue-500 hover:underline">app.supabase.com</a>.</li>
+                                <li>In your project, go to <strong>Settings</strong> (gear icon) &rarr; <strong>API</strong>.</li>
+                                <li>
+                                    Copy the <strong>Project URL</strong> and the <strong><code>anon</code> public key</strong>.
+                                </li>
+                                <li>
+                                    Paste them into the <code>SUPABASE_URL</code> and <code>SUPABASE_ANON_KEY</code> variables at the top of the script in this file.
+                                </li>
+                            </ol>
+                        </div>
+                    </div>
+                </div>
+            );
+        };
+
+        const Header = () => {
+            const { navigate, theme, toggleTheme } = useAppContext();
+            const { user, signOut } = useAuth();
+            return (
+                <header className="bg-white/80 dark:bg-gray-900/80 backdrop-blur-sm sticky top-0 z-40 border-b border-gray-200 dark:border-gray-700">
+                    <div className="container mx-auto px-4 py-3 flex justify-between items-center">
+                        <h1 onClick={() => navigate('home')} className="text-2xl font-bold cursor-pointer hover:text-blue-500 transition-colors">Chyrp</h1>
+                        <div className="flex items-center space-x-4">
+                            <button onClick={toggleTheme} className="p-2 rounded-full hover:bg-gray-200 dark:hover:bg-gray-700">{theme === 'light' ? '🌙' : '☀️'}</button>
+                            {user ? (<>
+                                <button onClick={() => navigate('editor')} className="px-4 py-2 text-sm font-medium text-white bg-blue-600 rounded-md hover:bg-blue-700">New Post</button>
+                                <button onClick={() => { signOut(); navigate('home'); }} className="text-sm font-medium hover:underline">Logout</button>
+                            </>) : (
+                                <button onClick={() => navigate('auth')} className="px-4 py-2 text-sm font-medium text-white bg-blue-600 rounded-md hover:bg-blue-700">Login / Sign Up</button>
+                            )}
+                        </div>
+                    </div>
+                </header>
+            );
+        };
+
+        const AuthPage = () => {
+            const { navigate } = useAppContext(); const { signIn, signUp } = useAuth(); const [email, setEmail] = useState(''); const [password, setPassword] = useState(''); const [isLogin, setIsLogin] = useState(true); const [loading, setLoading] = useState(false); const [error, setError] = useState(''); const [message, setMessage] = useState('');
+            const handleSubmit = async (e) => {
+                e.preventDefault(); setLoading(true); setError(''); setMessage('');
+                try {
+                    const { error } = isLogin ? await signIn({ email, password }) : await signUp({ email, password }); if (error) throw error;
+                    isLogin ? navigate('home') : setMessage('Success! Check your email for a confirmation link.');
+                } catch (err) { setError(err.error_description || err.message); } finally { setLoading(false); }
+            };
+            return (<div className="min-h-screen flex items-center justify-center bg-gray-50 dark:bg-gray-900 relative">
+                <button onClick={() => navigate('home')} className="absolute top-8 left-8 text-blue-500 hover:text-blue-600 dark:text-blue-400 dark:hover:text-blue-300 flex items-center space-x-2 text-sm font-medium p-2 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-800 transition-colors">
+                    <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" viewBox="0 0 20 20" fill="currentColor"><path fillRule="evenodd" d="M12.707 5.293a1 1 0 010 1.414L9.414 10l3.293 3.293a1 1 0 01-1.414 1.414l-4-4a1 1 0 010-1.414l4-4a1 1 0 011.414 0z" clipRule="evenodd" /></svg>
+                    <span>Back to Home</span>
+                </button>
+                <div className="max-w-md w-full bg-white dark:bg-gray-800 p-8 rounded-lg shadow-lg">
+                    <h2 className="text-2xl font-bold text-center mb-6">{isLogin ? 'Login' : 'Sign Up'}</h2>
+                    {error && <p className="bg-red-100 text-red-700 p-3 rounded-md mb-4">{error}</p>}
+                    {message && <p className="bg-green-100 text-green-700 p-3 rounded-md mb-4">{message}</p>}
+                    <form onSubmit={handleSubmit}><div className="mb-4"><label className="block text-sm font-medium mb-1">Email</label><input type="email" value={email} onChange={e => setEmail(e.target.value)} className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md bg-gray-50 dark:bg-gray-700 focus:outline-none focus:ring-2 focus:ring-blue-500" required /></div><div className="mb-6"><label className="block text-sm font-medium mb-1">Password</label><input type="password" value={password} onChange={e => setPassword(e.target.value)} className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md bg-gray-50 dark:bg-gray-700 focus:outline-none focus:ring-2 focus:ring-blue-500" required /></div><button type="submit" disabled={loading} className="w-full bg-blue-600 text-white py-2 rounded-md hover:bg-blue-700 disabled:bg-blue-400 flex items-center justify-center">{loading ? <div className="w-5 h-5 border-2 border-white border-t-transparent rounded-full animate-spin"></div> : (isLogin ? 'Login' : 'Sign Up')}</button></form>
+                    <p className="text-center mt-4 text-sm">{isLogin ? "Don't have an account?" : "Already have an account?"}<button onClick={() => setIsLogin(!isLogin)} className="text-blue-500 hover:underline ml-1">{isLogin ? 'Sign Up' : 'Login'}</button></p>
+                </div>
+            </div>);
+        };
+        
+        const Lightbox = ({ src, onClose }) => <div className="lightbox" onClick={onClose}><img src={src} onClick={e => e.stopPropagation()} /></div>;
+        
+        const PostContent = ({ post, isPreview }) => {
+            const { feather_type, metadata, title } = post;
+            const [lightboxSrc, setLightboxSrc] = useState(null);
+            const contentRef = useRef(null);
+
+            useEffect(() => {
+                const highlight = () => {
+                    if (window.MathJax) window.MathJax.typesetPromise();
+                    if (window.hljs) document.querySelectorAll('pre code:not(.hljs)').forEach(window.hljs.highlightElement);
+                };
+                const timer = setTimeout(highlight, 50);
+                return () => clearTimeout(timer);
+            }, [post, isPreview]);
+
+            useEffect(() => {
+                if (contentRef.current) {
+                    const images = Array.from(contentRef.current.querySelectorAll('img'));
+                    const clickHandler = (e) => setLightboxSrc(e.target.src);
+                    images.forEach(img => {
+                        img.classList.add('cursor-pointer');
+                        img.addEventListener('click', clickHandler);
+                    });
+                    return () => images.forEach(img => img.removeEventListener('click', clickHandler));
+                }
+            }, [post, isPreview, lightboxSrc]);
+
+            if (!metadata) return <p className="text-red-500">Error: Post content is missing.</p>;
+            const embedContent = (text) => {
+                if (!text) return '';
+                const youtubeRegex = /(?:https?:\/\/)?(?:www\.)?(?:youtube\.com|youtu\.be)\/(?:watch\?v=)?([a-zA-Z0-9_-]{11})/g;
+                const vimeoRegex = /(?:https?:\/\/)?(?:www\.)?vimeo\.com\/(?:channels\/.+\/)?(\d+)/g;
+                return text
+                    .replace(youtubeRegex, '<iframe src="https://www.youtube.com/embed/$1" frameborder="0" allowfullscreen></iframe>')
+                    .replace(vimeoRegex, '<iframe src="https://player.vimeo.com/video/$1" frameborder="0" allowfullscreen></iframe>');
+            };
+
+            return (
+                <>
+                    {lightboxSrc && <Lightbox src={lightboxSrc} onClose={() => setLightboxSrc(null)} />}
+                    <div ref={contentRef}>
+                        {(() => {
+                            switch (feather_type) {
+                                case 'text':
+                                    let content = embedContent(metadata.text || '');
+                                    const description = metadata.description ? `<p class="italic text-gray-600 dark:text-gray-400">${metadata.description}</p>` : '';
+                                    if (isPreview && (metadata.description?.length > 150 || content.length > 250)) {
+                                        content = content.substring(0, 250) + '... <span class="text-blue-500 font-semibold">Read More</span>';
+                                    }
+                                    return <div className="prose dark:prose-invert max-w-none" dangerouslySetInnerHTML={{ __html: marked.parse(description + content) }}></div>;
+                                case 'photo':
+                                    return (<div>
+                                        <img src={metadata.imageUrl} alt={title} className="w-full rounded-lg mb-4 cursor-pointer" onClick={() => setLightboxSrc(metadata.imageUrl)} />
+                                        {metadata.caption && <p className="text-center italic text-gray-600 dark:text-gray-400">{metadata.caption}</p>}
+                                    </div>);
+                                case 'quote':
+                                    return (
+                                        <>
+                                            <blockquote className="p-4 my-4 border-l-4 border-gray-300 dark:border-gray-500 bg-gray-100 dark:bg-gray-800">
+                                                <p className="text-xl italic font-medium leading-relaxed">"{metadata.quote}"</p>
+                                                {metadata.source && <cite className="block text-right mt-2 not-italic text-gray-500 dark:text-gray-400">— {metadata.source}</cite>}
+                                            </blockquote>
+                                            {metadata.description && <div className="prose dark:prose-invert max-w-none mt-4" dangerouslySetInnerHTML={{ __html: marked.parse(metadata.description) }}></div>}
+                                        </>
+                                    );
+                                case 'link':
+                                    return <a href={metadata.url} target="_blank" rel="noopener noreferrer" className="block p-4 bg-gray-100 dark:bg-gray-800 rounded-lg hover:bg-gray-200 dark:hover:bg-gray-700 transition-colors"><h3 className="text-lg font-bold text-blue-600 dark:text-blue-400">{title} &rarr;</h3><p className="text-sm text-gray-500 dark:text-gray-400 break-all">{metadata.url}</p>{metadata.description && <p className="mt-2">{metadata.description}</p>}</a>;
+                
+                                case 'video':
+                                    return (<div>
+                                        <video controls src={metadata.videoUrl} className="w-full rounded-lg mb-4 bg-black"></video>
+                                        {metadata.caption && <p className="text-center italic text-gray-600 dark:text-gray-400">{metadata.caption}</p>}
+                                    </div>);
+                
+                                case 'audio':
+                                    return (<div className="p-4 bg-gray-100 dark:bg-gray-800 rounded-lg">
+                                        <h3 className="font-bold mb-2">{title}</h3>
+                                        <audio controls src={metadata.audioUrl} className="w-full"></audio>
+                                        {metadata.caption && <p className="mt-2 text-sm italic text-gray-600 dark:text-gray-400">{metadata.caption}</p>}
+                                    </div>);
+                                default: return <p>Unsupported post type.</p>;
+                            }
+                        })()}
+                    </div>
+                </>
+            );
+        };
+        
+        const CommentsSection = ({ postId }) => {
+            const { user } = useAuth(); const { navigate } = useAppContext();
+            const [comments, setComments] = useState([]); const [newComment, setNewComment] = useState(''); const [loading, setLoading] = useState(true); const [error, setError] = useState('');
+            const [maptcha, setMaptcha] = useState({ a: 0, b: 0 }); const [maptchaAnswer, setMaptchaAnswer] = useState('');
+
+            const generateMaptcha = () => { setMaptcha({ a: Math.floor(Math.random() * 10), b: Math.floor(Math.random() * 10) }); };
+            useEffect(generateMaptcha, []);
+
+            const fetchComments = useCallback(async () => {
+                const { data, error } = await supabaseClient.from('comments').select('*, author:profiles!user_id(username)').eq('post_id', postId).order('created_at', { ascending: true });
+                if (error) setError(error.message); else setComments(data);
+                setLoading(false);
+            }, [postId]);
+
+            useEffect(() => { fetchComments(); }, [fetchComments]);
+
+            const handlePostComment = async (e) => {
+                e.preventDefault();
+                if (parseInt(maptchaAnswer) !== maptcha.a + maptcha.b) { setError("Incorrect math problem answer."); return; }
+                if (!newComment.trim()) return;
+                setError('');
+                const { error } = await supabaseClient.from('comments').insert({ content: newComment, post_id: postId, user_id: user.id });
+                if (error) setError(error.message); else { setNewComment(''); setMaptchaAnswer(''); generateMaptcha(); fetchComments(); }
+            };
+
+            return (<div className="mt-12 pt-8 border-t border-gray-200 dark:border-gray-700">
+                <h2 className="text-2xl font-bold mb-6">Comments ({comments.length})</h2>
+                {loading && <Spinner />}
+                {error && !loading && <p className="text-red-500 mb-4">{error}</p>}
+                <div className="space-y-6">{comments.map(comment => (<div key={comment.id} className="flex space-x-4"><div className="flex-shrink-0 w-10 h-10 bg-gray-200 dark:bg-gray-700 rounded-full flex items-center justify-center font-bold text-gray-500">{comment.author?.username?.[0]?.toUpperCase() || 'A'}</div><div><p className="font-semibold">{comment.author?.username || 'Anonymous'}</p><p className="text-sm text-gray-500 dark:text-gray-400 mb-1">{new Date(comment.created_at).toLocaleString()}</p><p className="prose dark:prose-invert max-w-none">{comment.content}</p></div></div>))}</div>
+                {user ? (<form onSubmit={handlePostComment} className="mt-8"><textarea value={newComment} onChange={e => setNewComment(e.target.value)} placeholder="Write a comment..." className="w-full p-2 border border-gray-300 dark:border-gray-600 rounded-md bg-gray-50 dark:bg-gray-700 focus:outline-none focus:ring-2 focus:ring-blue-500" rows="3" required></textarea><div className="flex items-center justify-between mt-2 flex-wrap gap-4"><div className="flex items-center space-x-2"><label htmlFor="maptcha" className="text-sm font-medium">What is {maptcha.a} + {maptcha.b}?</label><input id="maptcha" type="number" value={maptchaAnswer} onChange={e => setMaptchaAnswer(e.target.value)} className="w-20 px-2 py-1 border border-gray-300 dark:border-gray-600 rounded-md bg-gray-50 dark:bg-gray-700" required /></div><button type="submit" className="px-4 py-2 bg-blue-600 text-white font-semibold rounded-md hover:bg-blue-700 disabled:bg-blue-400">Post Comment</button></div></form>) : (<div className="mt-8 text-center p-4 bg-gray-100 dark:bg-gray-800 rounded-lg"><p>Please <button onClick={() => navigate('auth')} className="text-blue-500 hover:underline font-semibold">log in</button> to post a comment.</p></div>)}
+            </div>);
+        };
+        
+        const PostActions = ({ post }) => {
+            const { user } = useAuth(); const { navigate } = useAppContext();
+            const [likes, setLikes] = useState(post.likes?.length || 0);
+            const [hasLiked, setHasLiked] = useState(post.likes?.some(like => like.user_id === user?.id));
+            const [views, setViews] = useState(post.post_views?.[0]?.view_count || 0);
+
+            const toggleLike = async () => {
+                if (!user) { navigate('auth'); return; }
+                if (hasLiked) {
+                    await supabaseClient.from('likes').delete().match({ post_id: post.id, user_id: user.id });
+                    setLikes(l => l - 1); setHasLiked(false);
+                } else {
+                    await supabaseClient.from('likes').insert({ post_id: post.id, user_id: user.id });
+                    setLikes(l => l + 1); setHasLiked(true);
+                }
+            };
+
+            return (<div className="flex items-center space-x-6 text-gray-500 dark:text-gray-400 mt-6 pt-4 border-t border-gray-200 dark:border-gray-700">
+                <button onClick={toggleLike} className={`flex items-center space-x-2 hover:text-red-500 ${hasLiked ? 'text-red-500' : ''}`}>
+                    <svg className="w-6 h-6" fill={hasLiked ? 'currentColor' : 'none'} stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M4.318 6.318a4.5 4.5 0 016.364 0L12 7.636l1.318-1.318a4.5 4.5 0 116.364 6.364L12 20.364l-7.682-7.682a4.5 4.5 0 010-6.364z"></path></svg>
+                    <span className="font-medium">{likes}</span>
+                </button>
+                <div className="flex items-center space-x-2">
+                    <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"></path><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z"></path></svg>
+                    <span className="font-medium">{views} Views</span>
+                </div>
+            </div>);
+        };
+        
+        const HomePage = () => {
+            const { navigate } = useAppContext(); const { user } = useAuth();
+            const [posts, setPosts] = useState([]); const [loading, setLoading] = useState(true); const [error, setError] = useState('');
+            const [page, setPage] = useState(0); const [hasMore, setHasMore] = useState(true);
+            const POSTS_PER_PAGE = 5;
+
+            const fetchPosts = useCallback(async (pageNum) => {
+                if(pageNum === 0) setLoading(true);
+                const { data, error } = await supabaseClient
+                    .from('posts')
+                    .select(`*, author:profiles!user_id(username)`)
+                    .order('created_at', { ascending: false })
+                    .range(pageNum * POSTS_PER_PAGE, (pageNum + 1) * POSTS_PER_PAGE - 1);
+                
+                if (error) setError(error.message);
+                else {
+                    setPosts(prev => pageNum === 0 ? data : [...prev, ...data]);
+                    if (data.length < POSTS_PER_PAGE) setHasMore(false);
+                }
+                if(pageNum === 0) setLoading(false);
+            }, []);
+
+            useEffect(() => {
+                if (user) { setPosts([]); setPage(0); setHasMore(true); fetchPosts(0); }
+                else { setPosts([]); setLoading(false); }
+            }, [user]);
+
+            const lastPostElementRef = useInfiniteScroll(() => {
+                if(hasMore && !loading) {
+                    const nextPage = page + 1;
+                    setPage(nextPage);
+                    fetchPosts(nextPage);
+                }
+            }, hasMore);
+
+            if (!user) return <div className="container mx-auto px-4 py-8 text-center"><div className="max-w-md mx-auto bg-white dark:bg-gray-800 rounded-lg shadow-md p-8 mt-16"><h2 className="text-2xl font-bold mb-4">Welcome to Chyrp</h2><p className="text-gray-600 dark:text-gray-400 mb-6">Log in or sign up to view and create posts.</p><button onClick={() => navigate('auth')} className="w-full bg-blue-600 text-white py-2 rounded-md hover:bg-blue-700">Login / Sign Up</button></div></div>;
+            if (loading && page === 0) return <Spinner />; if (error) return <div className="text-center text-red-500 p-8">{error}</div>;
+
+            return <div className="container mx-auto px-4 py-8"><div className="space-y-8 max-w-3xl mx-auto">{posts.length === 0 && !loading ? <div className="text-center py-20"><h2 className="text-2xl font-semibold mb-2">No posts yet.</h2><p className="text-gray-500">Why not create the first one?</p></div> : posts.map((post, index) => <article ref={index === posts.length - 1 ? lastPostElementRef : null} key={post.id} className="bg-white dark:bg-gray-800 rounded-lg shadow-md p-6"><div onClick={() => navigate('post', { postId: post.id })} className="cursor-pointer"><h2 className="text-2xl font-bold mb-2 hover:text-blue-500">{post.title}</h2></div><p className="text-gray-600 dark:text-gray-400 text-sm mb-4">By <button onClick={(e) => { e.stopPropagation(); navigate('profile', { userId: post.user_id });}} className="font-semibold hover:underline">{post.author?.username || 'Anonymous'}</button> on {new Date(post.created_at).toLocaleDateString()}</p><div onClick={() => navigate('post', { postId: post.id })} className="cursor-pointer"><PostContent post={post} isPreview={true} /></div></article>)} {hasMore && <Spinner/>} </div></div>;
+        };
+
+        const PostPage = ({ postId }) => {
+            const { navigate } = useAppContext(); const { user } = useAuth(); const [post, setPost] = useState(null); const [loading, setLoading] = useState(true); const [error, setError] = useState('');
+            
+            useEffect(() => {
+                const fetchPost = async () => {
+                    if (!user) { navigate('auth'); return; }
+                    try {
+                        const { data, error } = await supabaseClient.from('posts').select('*, author:profiles!user_id(username), category:categories(name), tags:tags(name), likes(user_id), post_views(view_count)').eq('id', postId).single();
+                        if (error) throw error;
+                        setPost(data);
+                        await supabaseClient.rpc('increment_post_view', { post_uuid: postId });
+                    } catch (err) { setError(err.message); } finally { setLoading(false); }
+                };
+                fetchPost();
+            }, [postId, user]);
+            
+            if (loading) return <div className="min-h-screen"><Spinner /></div>; if (error || !post) return <div className="text-center text-red-500 p-8">{error || "Post not found."}</div>;
+            
+            return (<div className="container mx-auto px-4 py-8 max-w-3xl">
+                <button onClick={() => navigate('home')} className="text-blue-500 hover:underline mb-6">&larr; Back to posts</button>
+                <article className="bg-white dark:bg-gray-800 rounded-lg shadow-md p-8">
+                    {post.category && <span className="text-sm font-bold uppercase text-blue-500">{post.category.name}</span>}
+                    <h1 className="text-4xl font-extrabold my-4">{post.title}</h1>
+                    <p className="text-gray-500 dark:text-gray-400 mb-8">By <button onClick={() => navigate('profile', { userId: post.user_id })} className="font-semibold hover:underline">{post.author?.username || 'Anonymous'}</button> on {new Date(post.created_at).toLocaleDateString()}</p>
+                    <PostContent post={post} />
+                    {post.tags.length > 0 && <div className="mt-6 flex flex-wrap gap-2">{post.tags.map(tag => <span key={tag.name} className="text-xs bg-gray-200 dark:bg-gray-700 rounded-full px-3 py-1 font-medium">{tag.name}</span>)}</div>}
+                    <PostActions post={post} />
+                </article>
+                {(post.attribution || post.copyright_notice) && <div className="mt-6 p-4 bg-gray-100 dark:bg-gray-800 rounded-lg text-sm text-gray-600 dark:text-gray-400"> {post.attribution && <p><strong>Attribution:</strong> {post.attribution}</p>} {post.copyright_notice && <p><strong>Copyright:</strong> {post.copyright_notice}</p>}</div>}
+                <CommentsSection postId={postId} />
+            </div>);
+        };
+        
+        const ProfilePage = ({ userId }) => {
+            const { navigate } = useAppContext(); const [profile, setProfile] = useState(null); const [posts, setPosts] = useState([]); const [loading, setLoading] = useState(true);
+            useEffect(() => {
+                const fetchProfileData = async () => {
+                    setLoading(true);
+                    const { data: profileData } = await supabaseClient.from('profiles').select('*').eq('id', userId).single();
+                    const { data: postsData } = await supabaseClient.from('posts').select('*, author:profiles!user_id(username)').eq('user_id', userId).order('created_at', { ascending: false });
+                    setProfile(profileData); setPosts(postsData || []); setLoading(false);
+                };
+                fetchProfileData();
+            }, [userId]);
+            if (loading) return <Spinner />;
+            return <div className="container mx-auto px-4 py-8 max-w-3xl">
+                <div className="flex items-center space-x-4 mb-8">
+                    <div className="w-24 h-24 bg-gray-200 dark:bg-gray-700 rounded-full flex items-center justify-center text-4xl font-bold text-gray-500">{profile?.username?.[0]?.toUpperCase() || 'A'}</div>
+                    <div>
+                        <h1 className="text-4xl font-bold">@{profile?.username}</h1>
+                        <p className="text-gray-500 dark:text-gray-400">Member since {new Date(profile?.created_at).toLocaleDateString()}</p>
+                    </div>
+                </div>
+                <h2 className="text-2xl font-bold border-b pb-2 mb-6">Posts</h2>
+                <div className="space-y-8">{posts.length > 0 ? posts.map(post => <article key={post.id} className="bg-white dark:bg-gray-800 rounded-lg shadow-md p-6"><div onClick={() => navigate('post', { postId: post.id })} className="cursor-pointer"><h2 className="text-2xl font-bold mb-2 hover:text-blue-500">{post.title}</h2><p className="text-sm text-gray-500 dark:text-gray-400 mb-2">{new Date(post.created_at).toLocaleDateString()}</p><PostContent post={post} isPreview={true} /></div></article>) : <p>This user hasn't posted anything yet.</p>}</div>
+            </div>;
+        };
+
+        const EditorPage = () => {
+            const { navigate, page } = useAppContext();
+            const { user } = useAuth();
+            
+            const isEditing = page.post != null;
+            
+            const [loading, setLoading] = useState(false);
+            const [error, setError] = useState('');
+            
+            const [featherType, setFeatherType] = useState(isEditing ? page.post.feather_type : 'text');
+            const [title, setTitle] = useState(isEditing ? page.post.title : '');
+            const [metadata, setMetadata] = useState(isEditing ? page.post.metadata : { text: '', description: '' });
+            const [attribution, setAttribution] = useState(isEditing ? page.post.attribution : '');
+            const [copyright, setCopyright] = useState(isEditing ? page.post.copyright_notice : '');
+            const [categoryId, setCategoryId] = useState(isEditing ? page.post.category_id : '');
+            const [tags, setTags] = useState('');
+            
+            const [allCategories, setAllCategories] = useState([]);
+
+            useEffect(() => {
+                if (!user) navigate('auth');
+
+                const fetchInitialData = async () => {
+                    const { data } = await supabaseClient.from('categories').select('id, name');
+                    if (data) setAllCategories(data);
+                    
+                    if(isEditing && page.post.id) {
+                         const { data: postData } = await supabaseClient.from('posts').select('*, tags(name)').eq('id', page.post.id).single();
+                         if(postData && postData.tags) {
+                            setTags(postData.tags.map(t => t.name).join(', '));
+                         }
+                    }
+                };
+                fetchInitialData();
+            }, [user, isEditing, page.post]);
+
+            const handleFeatherChange = (type) => {
+                setFeatherType(type);
+                const defaultMetadata = {
+                    text: { text: '', description: '' },
+                    photo: { imageUrl: '', caption: '' },
+                    quote: { quote: '', source: '', description: '' },
+                    link: { url: '', description: '' },
+                    video: { videoUrl: '', caption: '' }, 
+                    audio: { audioUrl: '', caption: '' }
+                };
+                setMetadata(defaultMetadata[type]);
+            };
+            
+            const handleMetadataChange = (field, value) => setMetadata(prev => ({ ...prev, [field]: value }));
+            const handleFileUpload = async (file, type) => {
+                if (!file) return; setLoading(true); setError('');
+                try {
+                    const fileExt = file.name.split('.').pop();
+                    const fileName = `${user.id}-${Date.now()}.${fileExt}`;
+                    const { error: uploadError } = await supabaseClient.storage.from('post_media').upload(fileName, file);
+                    if (uploadError) throw uploadError;
+                    const { data } = supabaseClient.storage.from('post_media').getPublicUrl(fileName);
+                    const urlField = type === 'photo' ? 'imageUrl' : type === 'video' ? 'videoUrl' : 'audioUrl';
+                    handleMetadataChange(urlField, data.publicUrl);
+                } catch (err) { setError(err.message); } 
+                finally { setLoading(false); }
+            };
+
+            const handleSaveTags = async (postId, tagString) => {
+                const tagNames = tagString.split(',').map(t => t.trim().toLowerCase()).filter(Boolean);
+                if (tagNames.length === 0) {
+                    await supabaseClient.from('post_tags').delete().match({ post_id: postId });
+                    return;
+                }
+                let { data: existingTags } = await supabaseClient.from('tags').select('id, name').in('name', tagNames);
+                const existingTagNames = existingTags.map(t => t.name);
+                const newTagNames = tagNames.filter(name => !existingTagNames.includes(name));
+                let newTags = [];
+                if (newTagNames.length > 0) {
+                    const { data } = await supabaseClient.from('tags').insert(newTagNames.map(name => ({ name }))).select();
+                    newTags = data || [];
+                }
+                const allTagIds = [...existingTags.map(t => t.id), ...newTags.map(t => t.id)];
+                await supabaseClient.from('post_tags').delete().match({ post_id: postId });
+                if (allTagIds.length > 0) {
+                    await supabaseClient.from('post_tags').insert(allTagIds.map(tagId => ({ post_id: postId, tag_id: tagId })));
+                }
+            };
+
+            const handleSave = async () => {
+                if (!title) { setError('Title is required.'); return; }
+                setLoading(true); setError('');
+                try {
+                    const postData = { title, metadata, user_id: user.id, feather_type: featherType, category_id: categoryId || null, attribution: attribution || null, copyright_notice: copyright || null };
+                    let postResult;
+                    if (isEditing) {
+                        const { data, error } = await supabaseClient.from('posts').update(postData).eq('id', page.post.id).select().single();
+                        if (error) throw error;
+                        postResult = data;
+                    } else {
+                        const { data, error } = await supabaseClient.from('posts').insert(postData).select().single();
+                        if (error) throw error;
+                        postResult = data;
+                    }
+                    await handleSaveTags(postResult.id, tags);
+                    navigate('post', { postId: postResult.id });
+                } catch (err) { setError(err.message); } 
+                finally { setLoading(false); }
+            };
+
+            const renderFeatherInputs = () => {
+                const uploadButton = (type) => (
+                    <label className="flex flex-col items-center justify-center w-full h-48 border-2 border-dashed rounded-lg cursor-pointer bg-gray-100 dark:bg-gray-800 hover:bg-gray-200 dark:hover:bg-gray-700">
+                        <div className="flex flex-col items-center justify-center pt-5 pb-6">
+                            <svg className="w-10 h-10 mb-3 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M7 16a4 4 0 01-4-4V7a4 4 0 014-4h.586a1 1 0 01.707.293l2.414 2.414a1 1 0 00.707.293h3.172a1 1 0 00.707-.293l2.414-2.414A1 1 0 0116.414 3H17a4 4 0 014 4v5a4 4 0 01-4 4H7z"></path></svg>
+                            <p className="mb-2 text-sm text-gray-500 dark:text-gray-400"><span className="font-semibold">Click to upload</span> or drag and drop</p>
+                            <p className="text-xs text-gray-500 dark:text-gray-400">{type.toUpperCase()} file</p>
+                        </div>
+                        <input type="file" accept={`${type}/*`} onChange={(e) => handleFileUpload(e.target.files[0], type)} className="hidden"/>
+                    </label>
+                );
+
+                 switch (featherType) {
+                    case 'text': return (
+                        <div className="space-y-4">
+                            <textarea placeholder="Summary / Description (optional)" value={metadata.description || ''} onChange={(e) => handleMetadataChange('description', e.target.value)} className="w-full h-24 p-2 border rounded-md bg-gray-100 dark:bg-gray-800"/>
+                            <textarea placeholder="Write your main post content here. Markdown is supported." value={metadata.text || ''} onChange={(e) => handleMetadataChange('text', e.target.value)} className="w-full h-80 p-2 border rounded-md bg-gray-100 dark:bg-gray-800 font-mono"/>
+                        </div>
+                    );
+                    case 'photo': return <div className="space-y-4">{uploadButton('photo')}{loading && <div className="text-center">Uploading... <Spinner /></div>}{metadata.imageUrl && <img src={metadata.imageUrl} className="max-h-64 rounded-lg mx-auto"/>}<input type="text" placeholder="Optional caption" value={metadata.caption || ''} onChange={(e) => handleMetadataChange('caption', e.target.value)} className="w-full p-2 border rounded-md bg-gray-100 dark:bg-gray-800"/></div>;
+                    case 'quote': return (
+                        <div className="space-y-4">
+                            <textarea placeholder="The quote..." value={metadata.quote || ''} onChange={(e) => handleMetadataChange('quote', e.target.value)} className="w-full h-40 p-2 border rounded-md bg-gray-100 dark:bg-gray-800 text-xl italic"/>
+                            <input type="text" placeholder="Source (e.g., author, book)" value={metadata.source || ''} onChange={(e) => handleMetadataChange('source', e.target.value)} className="w-full p-2 border rounded-md bg-gray-100 dark:bg-gray-800"/>
+                             <textarea placeholder="Description / Context (optional)" value={metadata.description || ''} onChange={(e) => handleMetadataChange('description', e.target.value)} className="w-full h-24 p-2 border rounded-md bg-gray-100 dark:bg-gray-800"/>
+                        </div>
+                    );
+                    case 'link': return <div className="space-y-4"><input type="url" placeholder="https://example.com" value={metadata.url || ''} onChange={(e) => handleMetadataChange('url', e.target.value)} className="w-full p-2 border rounded-md bg-gray-100 dark:bg-gray-800"/><textarea placeholder="Optional description" value={metadata.description || ''} onChange={(e) => handleMetadataChange('description', e.target.value)} className="w-full h-24 p-2 border rounded-md bg-gray-100 dark:bg-gray-800"/></div>;
+                    case 'video': return <div className="space-y-4">{uploadButton('video')}{loading && <div className="text-center">Uploading... <Spinner /></div>}{metadata.videoUrl && <video src={metadata.videoUrl} controls className="max-h-64 rounded-lg mx-auto bg-black"/>}<input type="text" placeholder="Optional caption" value={metadata.caption || ''} onChange={(e) => handleMetadataChange('caption', e.target.value)} className="w-full p-2 border rounded-md bg-gray-100 dark:bg-gray-800"/></div>;
+                    case 'audio': return <div className="space-y-4">{uploadButton('audio')}{loading && <div className="text-center">Uploading... <Spinner /></div>}{metadata.audioUrl && <audio src={metadata.audioUrl} controls className="w-full"/>}<input type="text" placeholder="Optional caption" value={metadata.caption || ''} onChange={(e) => handleMetadataChange('caption', e.target.value)} className="w-full p-2 border rounded-md bg-gray-100 dark:bg-gray-800"/></div>;
+                    default: return null;
+                }
+            };
+
+            const featherOptions = ['text', 'photo', 'quote', 'link', 'video', 'audio'];
+            
+            return (<div className="container mx-auto px-4 py-8 max-w-3xl">
+                <button onClick={() => navigate('home')} className="text-blue-500 hover:underline mb-4">&larr; Back to Home</button>
+                <h1 className="text-3xl font-bold mb-6">{isEditing ? 'Edit Post' : 'Create New Post'}</h1>
+                {error && <p className="bg-red-100 text-red-700 p-3 rounded-md mb-4">{error}</p>}
+                <div className="mb-6 flex flex-wrap gap-2 border-b border-gray-200 dark:border-gray-700 pb-4">{featherOptions.map(f => (<button key={f} onClick={() => handleFeatherChange(f)} className={`px-4 py-2 text-sm font-medium rounded-md capitalize ${featherType === f ? 'bg-blue-600 text-white' : 'bg-gray-200 dark:bg-gray-700 hover:bg-gray-300 dark:hover:bg-gray-600'}`}>{f}</button>))}</div>
+                <div className="space-y-6">
+                    <input type="text" placeholder="Post Title" value={title} onChange={(e) => setTitle(e.target.value)} className="w-full text-2xl font-bold p-2 border-2 rounded-md bg-gray-100 dark:bg-gray-800 focus:outline-none ring-blue-500"/>
+                    {renderFeatherInputs()}
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-6 pt-4 border-t">
+                        <div><label className="block text-sm font-medium mb-1">Category</label><select value={categoryId} onChange={(e) => setCategoryId(e.target.value)} className="w-full p-2 border rounded-md bg-gray-100 dark:bg-gray-800"><option value="">-- Select Category --</option>{allCategories.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}</select></div>
+                        <div><label className="block text-sm font-medium mb-1">Tags</label><input type="text" placeholder="tech, news, art (comma-separated)" value={tags} onChange={e => setTags(e.target.value)} className="w-full p-2 border rounded-md bg-gray-100 dark:bg-gray-800"/></div>
+                        <div><label className="block text-sm font-medium mb-1">Attribution</label><input type="text" placeholder="e.g., John Doe" value={attribution} onChange={e => setAttribution(e.target.value)} className="w-full p-2 border rounded-md bg-gray-100 dark:bg-gray-800"/></div>
+                        <div><label className="block text-sm font-medium mb-1">Copyright Notice</label><input type="text" placeholder="e.g., © 2025 Your Name" value={copyright} onChange={e => setCopyright(e.target.value)} className="w-full p-2 border rounded-md bg-gray-100 dark:bg-gray-800"/></div>
+                    </div>
+                    <div className="flex justify-end"><button onClick={handleSave} disabled={loading} className="px-6 py-2 bg-blue-600 text-white font-semibold rounded-md hover:bg-blue-700 disabled:bg-blue-400 flex items-center justify-center min-w-[120px]">{loading ? <div className="w-5 h-5 border-2 border-white border-t-transparent rounded-full animate-spin"></div> : (isEditing ? 'Update Post' : 'Publish Post')}</button></div>
+                </div>
+            </div>);
+        };
+
+        // --- MAIN APP ROUTER ---
+        const App = () => {
+            if (!isConfigured) { return <ConfigurationError />; }
+            return (<AppProvider><AuthProvider><MainContent /></AuthProvider></AppProvider>);
+        };
+        const MainContent = () => {
+            const { page } = useAppContext();
+            const { user } = useAuth();
+            const renderPage = () => {
+                switch (page.currentPage) {
+                    case 'home': return <HomePage />;
+                    case 'post': return <PostPage postId={page.postId} />;
+                    case 'profile': return user ? <ProfilePage userId={page.userId} /> : <AuthPage/>;
+                    case 'editor': return user ? <EditorPage post={page.post} /> : <AuthPage />;
+                    case 'auth': return user ? <HomePage /> : <AuthPage />;
+                    default: return <div className="text-center p-8">404 - Page Not Found</div>;
+                }
+            };
+            if (page.currentPage === 'auth' && !user) return <AuthPage />;
+            return <><Header /><main>{renderPage()}</main></>;
+        };
+
+        const container = document.getElementById('root');
+        const root = ReactDOM.createRoot(container);
+        root.render(<App />);
+
+    </script>
+</body>
+</html>
