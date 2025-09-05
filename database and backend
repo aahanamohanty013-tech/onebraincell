@@ -1,0 +1,149 @@
+DROP TRIGGER IF EXISTS on_auth_user_created ON auth.users;
+DROP FUNCTION IF EXISTS public.handle_new_user();
+DROP FUNCTION IF EXISTS public.increment_post_view(post_uuid uuid);
+
+-- Drop Storage Policies explicitly
+DROP POLICY IF EXISTS "Allow public read access to media" ON storage.objects;
+DROP POLICY IF EXISTS "Allow authenticated users to upload media" ON storage.objects;
+
+-- Drop Tables. CASCADE removes any dependent objects.
+DROP TABLE IF EXISTS public.comments CASCADE;
+DROP TABLE IF EXISTS public.likes CASCADE;
+DROP TABLE IF EXISTS public.post_views CASCADE;
+DROP TABLE IF EXISTS public.post_tags CASCADE;
+DROP TABLE IF EXISTS public.posts CASCADE;
+DROP TABLE IF EXISTS public.tags CASCADE;
+DROP TABLE IF EXISTS public.categories CASCADE;
+DROP TABLE IF EXISTS public.profiles CASCADE;
+
+
+-- 1. Create table for public user profiles
+CREATE TABLE public.profiles (
+  id UUID NOT NULL PRIMARY KEY REFERENCES auth.users(id) ON DELETE CASCADE,
+  username TEXT UNIQUE,
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  CONSTRAINT username_length CHECK (char_length(username) >= 3)
+);
+
+-- 2. Set up RLS for profiles
+ALTER TABLE public.profiles ENABLE ROW LEVEL SECURITY;
+CREATE POLICY "Public profiles are viewable by everyone." ON public.profiles FOR SELECT USING (true);
+CREATE POLICY "Users can insert their own profile." ON public.profiles FOR INSERT WITH CHECK (auth.uid() = id);
+CREATE POLICY "Users can update their own profile." ON public.profiles FOR UPDATE USING (auth.uid() = id);
+
+-- 3. A robust trigger to create a profile when a new user signs up.
+CREATE OR REPLACE FUNCTION public.handle_new_user()
+RETURNS TRIGGER AS $$
+DECLARE
+  generated_username TEXT;
+BEGIN
+  generated_username := split_part(new.email, '@', 1);
+  IF char_length(generated_username) < 3 THEN
+    generated_username := generated_username || substr(replace(gen_random_uuid()::text, '-', ''), 1, 4);
+  END IF;
+
+  INSERT INTO public.profiles (id, username)
+  VALUES (new.id, generated_username)
+  ON CONFLICT (username) DO UPDATE SET username = EXCLUDED.username || substr(replace(gen_random_uuid()::text, '-', ''), 1, 4);
+  
+  RETURN new;
+END;
+$$ LANGUAGE plpgsql SECURITY DEFINER;
+
+CREATE TRIGGER on_auth_user_created
+  AFTER INSERT ON auth.users
+  FOR EACH ROW EXECUTE PROCEDURE public.handle_new_user();
+
+-- 3.5: Backfill profiles for any existing users that might be missing
+INSERT INTO public.profiles (id, username)
+SELECT id, 
+    CASE
+        WHEN char_length(split_part(email, '@', 1)) >= 3 THEN split_part(email, '@', 1)
+        ELSE split_part(email, '@', 1) || substr(replace(gen_random_uuid()::text, '-', ''), 1, 4)
+    END
+FROM auth.users u
+WHERE NOT EXISTS (SELECT 1 FROM public.profiles p WHERE p.id = u.id)
+ON CONFLICT (username) DO NOTHING;
+
+
+-- 4. Create supporting tables for posts
+CREATE TABLE public.categories ( id SERIAL PRIMARY KEY, name TEXT NOT NULL UNIQUE );
+CREATE TABLE public.tags ( id SERIAL PRIMARY KEY, name TEXT NOT NULL UNIQUE );
+
+-- 5. Create the main posts table with all features
+CREATE TABLE public.posts (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id UUID NOT NULL REFERENCES public.profiles(id) ON DELETE CASCADE,
+  created_at TIMESTAMPTZ DEFAULT NOW() NOT NULL,
+  title TEXT NOT NULL,
+  feather_type VARCHAR(20) DEFAULT 'text' NOT NULL,
+  metadata JSONB,
+  category_id INTEGER REFERENCES public.categories(id) ON DELETE SET NULL,
+  attribution TEXT,
+  copyright_notice TEXT
+);
+
+-- 6. Set up RLS for posts
+ALTER TABLE public.posts ENABLE ROW LEVEL SECURITY;
+CREATE POLICY "Posts are viewable by authenticated users." ON public.posts FOR SELECT USING (auth.role() = 'authenticated');
+CREATE POLICY "Users can insert their own posts." ON public.posts FOR INSERT WITH CHECK (auth.uid() = user_id);
+CREATE POLICY "Users can update their own posts." ON public.posts FOR UPDATE USING (auth.uid() = user_id);
+
+-- 7. Create join table for many-to-many post-tag relationship
+CREATE TABLE public.post_tags (
+    post_id UUID NOT NULL REFERENCES public.posts(id) ON DELETE CASCADE,
+    tag_id INTEGER NOT NULL REFERENCES public.tags(id) ON DELETE CASCADE,
+    PRIMARY KEY (post_id, tag_id)
+);
+
+-- 8. Create tables for engagement modules (Likes, Comments, Views)
+CREATE TABLE public.likes (
+    post_id UUID NOT NULL REFERENCES public.posts(id) ON DELETE CASCADE,
+    user_id UUID NOT NULL REFERENCES public.profiles(id) ON DELETE CASCADE,
+    PRIMARY KEY (post_id, user_id)
+);
+CREATE TABLE public.comments (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    post_id UUID NOT NULL REFERENCES public.posts(id) ON DELETE CASCADE,
+    user_id UUID NOT NULL REFERENCES public.profiles(id) ON DELETE CASCADE,
+    content TEXT NOT NULL,
+    created_at TIMESTAMPTZ DEFAULT NOW() NOT NULL
+);
+CREATE TABLE public.post_views (
+    post_id UUID PRIMARY KEY REFERENCES public.posts(id) ON DELETE CASCADE,
+    view_count INT DEFAULT 1 NOT NULL
+);
+
+-- 9. Set up RLS for engagement modules
+ALTER TABLE public.likes ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.comments ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.post_views ENABLE ROW LEVEL SECURITY;
+CREATE POLICY "All engagement data is public." ON public.likes FOR SELECT USING (true);
+CREATE POLICY "Users can manage their own likes." ON public.likes FOR ALL USING (auth.uid() = user_id);
+CREATE POLICY "All engagement data is public." ON public.comments FOR SELECT USING (true);
+CREATE POLICY "Users can manage their own comments." ON public.comments FOR ALL USING (auth.uid() = user_id);
+CREATE POLICY "All engagement data is public." ON public.post_views FOR SELECT USING (true);
+
+-- 10. Create RPC function to increment post views
+CREATE OR REPLACE FUNCTION increment_post_view(post_uuid UUID)
+RETURNS void AS $$
+BEGIN
+  INSERT INTO public.post_views (post_id, view_count)
+  VALUES (post_uuid, 1)
+  ON CONFLICT (post_id)
+  DO UPDATE SET view_count = post_views.view_count + 1;
+END;
+$$ LANGUAGE plpgsql;
+
+-- 11. Set up Supabase Storage for media uploads
+INSERT INTO storage.buckets (id, name, public)
+VALUES ('post_media', 'post_media', true)
+ON CONFLICT (id) DO NOTHING;
+
+CREATE POLICY "Allow public read access to media" ON storage.objects FOR SELECT USING ( bucket_id = 'post_media' );
+CREATE POLICY "Allow authenticated users to upload media" ON storage.objects FOR INSERT WITH CHECK ( bucket_id = 'post_media' AND auth.role() = 'authenticated' );
+
+-- 12. Add some default categories to get started
+INSERT INTO public.categories (name) VALUES
+('General'), ('Technology'), ('Lifestyle'), ('Tutorials'), ('News')
+ON CONFLICT(name) DO NOTHING;
