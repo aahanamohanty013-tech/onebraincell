@@ -2,7 +2,7 @@ Chyrp Clone - CloneFest 2025 Submission
 This project is a modern reimagining of the classic Chyrp blogging engine, rebuilt from the ground up for CloneFest 2025. It preserves the lightweight and flexible philosophy of the original while leveraging a modern, API-driven architecture with React and a Backend-as-a-Service (BaaS).
 
 Tech Stack
-Frontend: React 18 (served from a single index.html file)
+Frontend: React 18 (served from a single front.html file)
 
 Backend & Database: Supabase (PostgreSQL, Authentication, Storage, Instant APIs)
 
@@ -86,7 +86,7 @@ In your Supabase project, go to Project Settings (the gear icon) → API.
 
 You will find your Project URL and your anon public key.
 
-Open the index.html file. At the top of the <script type="text/babel"> tag, you will find these two lines:
+Open the front.html file. At the top of the <script type="text/babel"> tag, you will find these two lines:
 
 const SUPABASE_URL = '[https://your-project-id.supabase.co](https://your-project-id.supabase.co)';
 const SUPABASE_ANON_KEY = 'your-anon-public-key-goes-here';
