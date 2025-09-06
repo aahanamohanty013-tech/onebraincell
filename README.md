@@ -95,3 +95,5 @@ Replace the placeholder values with the URL and anon key you copied from your Su
 
 Step 3: Run the Application
 The application is a single HTML file and requires no build step. You can simply open the index.html file in your web browser. For the best experience and to avoid potential CORS issues, it's recommended to serve it with a simple local server (e.g., using the VS Code "Live Server" extension or python -m http.server).
+
+Step 4: deployment to the aws
