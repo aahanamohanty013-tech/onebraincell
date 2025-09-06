@@ -95,3 +95,14 @@ Replace the placeholder values with the URL and anon key you copied from your Su
 
 Step 3: Run the Application
 The application is a single HTML file and requires no build step. You can simply open the index.html file in your web browser. For the best experience and to avoid potential CORS issues, it's recommended to serve it with a simple local server (e.g., using the VS Code "Live Server" extension or python -m http.server).
+step 4 : Deploy to AWS 
+S3: Create a public S3 bucket, enable static hosting, and apply a public policy.
+
+Upload: Upload your front.html and any assets to the bucket.
+
+CloudFront: Create a CloudFront distribution, setting the origin to the S3 website endpoint.
+
+Wait: Wait 15-20 minutes for the deployment to finish.
+
+URL: Copy the "Distribution domain name" from CloudFront—this is your live link.
+https://d1a0gc32tm55cd.cloudfront.net/ live deployed website link
