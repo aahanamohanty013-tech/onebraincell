@@ -1,3 +1,7 @@
+For the evaluators, admin credentials are
+username- CloneFest2025@gmail.com 
+password- CloneFest2025
+
 Chyrp Clone - CloneFest 2025 Submission
 This project is a modern reimagining of the classic Chyrp blogging engine, rebuilt from the ground up for CloneFest 2025. It preserves the lightweight and flexible philosophy of the original while leveraging a modern, API-driven architecture with React and a Backend-as-a-Service (BaaS).
 
